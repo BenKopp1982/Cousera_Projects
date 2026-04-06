@@ -8,8 +8,6 @@ import numpy as np
 USER_TOKEN = "DEIN_PERSOENLICHER_DISCOGS_ZUGANGSTOKEN"
 
 # Modus wählen: 'LIST' oder 'ALL'
-# 'LIST': Analysiert nur die Interpreten in der ARTIST_LIST.
-# 'ALL':  Versucht, eine breite Palette von Interpreten zu analysieren (siehe Hinweis unten).
 ANALYSIS_MODE = 'LIST' 
 
 # Dateiname für die finale Excel-Datei
@@ -19,10 +17,9 @@ OUTPUT_FILENAME = "discogs_top_200_lp_artists.xlsx"
 PRICE_CONDITION = 'Very Good Plus (VG+)'
 
 # Liste der zu analysierenden Interpreten (nur im 'LIST'-Modus relevant)
-# Du kannst diese Liste nach Belieben erweitern.
 ARTIST_LIST = [
     "Ramones",
-    "Led Zeppelin",
+    "Led Zeppelin", # Korrekte Schreibweise
     "Pink Floyd",
     "The Beatles",
     "Kraftwerk",
@@ -35,27 +32,23 @@ ARTIST_LIST = [
 
 # --- HINWEIS ZUM 'ALL'-MODUS ---
 # Discogs bietet keine direkte Möglichkeit, "alle" Interpreten abzufragen.
-# Dieser Modus nutzt daher einen Workaround, indem er nach sehr allgemeinen Veröffentlichungen
-# sucht (z.B. aus dem Jahr 2023) und die Interpreten daraus extrahiert.
-# Das Ergebnis ist eine zufällige, aber breite Auswahl.
-# Dieser Modus kann SEHR LANGE dauern und viele API-Anfragen verbrauchen.
+# Dieser Modus nutzt daher einen Workaround. Dies kann SEHR LANGE dauern.
 
 def get_artist_list_for_all_mode(discogs_client_instance, limit=250):
     """Sammelt eine Liste von Interpreten für den 'ALL'-Modus."""
     print(f"Sammle eine Liste von bis zu {limit} Interpreten für den 'ALL'-Modus. Dies kann einen Moment dauern...")
     artists = set()
     try:
-        # Suche nach Releases aus einem aktuellen Jahr, um eine breite Auswahl zu bekommen
         search_results = discogs_client_instance.search(year='2023', type='release', per_page=100)
         page = 1
-        while len(artists) < limit and page < 10: # Begrenze die Suche auf 10 Seiten
+        while len(artists) < limit and page < 10:
             for release in search_results.page(page):
-                if release.artists:
+                if hasattr(release, 'artists') and release.artists:
                     artists.add(release.artists[0].name)
                 if len(artists) >= limit:
                     break
             page += 1
-            time.sleep(2) # Pause zwischen den Seiten
+            time.sleep(2)
     except Exception as e:
         print(f"Fehler beim Sammeln der Interpretenliste: {e}")
     print(f"{len(artists)} Interpreten gefunden.")
@@ -73,29 +66,31 @@ def analyze_artist(artist_name, discogs_client_instance):
             return []
         
         artist = results[0]
-        # API-Anfragen-Management
         request_count = 0
         max_requests_per_minute = 55
 
+        # Iteriere durch die Veröffentlichungen
         for release in artist.releases:
+            # *** KORREKTUR: Prüfen, ob das Objekt das Attribut 'formats' hat ***
+            # Dies filtert 'Master'-Objekte effektiv heraus.
+            if not hasattr(release, 'formats'):
+                continue
+
             if request_count >= max_requests_per_minute:
                 print("  -> Rate-Limit fast erreicht, warte 60 Sekunden...")
                 time.sleep(60)
                 request_count = 0
             
-            # Prüfen, ob es sich um eine LP handelt
             is_lp = False
             if release.formats:
                 try:
                     is_lp = any('LP' in f.get('descriptions', []) for f in release.formats)
                 except:
-                    # Manchmal sind die Formatdaten fehlerhaft
                     continue
 
             if is_lp:
-                request_count += 2 # Zählt für Release- und Preis-Abruf
+                request_count += 2
                 try:
-                    # Preisvorschläge abrufen
                     stats = release.marketplace_stats
                     if stats and stats.price_suggestions and PRICE_CONDITION in stats.price_suggestions:
                         price = stats.price_suggestions[PRICE_CONDITION].value
@@ -104,10 +99,9 @@ def analyze_artist(artist_name, discogs_client_instance):
                     else:
                         print(f"  -> LP gefunden: {release.title[:40]}... | Kein Preis für '{PRICE_CONDITION}' verfügbar.")
                 except Exception:
-                    # Fehler beim Abruf der Statistik ignorieren
                     print(f"  -> LP gefunden: {release.title[:40]}... | Preis-Statistik nicht abrufbar.")
                 
-                time.sleep(1.5) # Zusätzliche Pause zur Schonung der API
+                time.sleep(1.5)
         
         return lp_prices
 
@@ -122,11 +116,17 @@ def main():
         return
 
     try:
-        d = discogs_client.Client('DiscogsAnalyzerPro/1.0', user_token=USER_TOKEN)
+        d = discogs_client.Client('DiscogsAnalyzerPro/1.1', user_token=USER_TOKEN) # Version erhöht
     except Exception as e:
         print(f"Fehler bei der Initialisierung des Discogs-Clients: {e}")
         return
     
+    # Korrektur des Namens in der Liste für den Fall, dass er falsch geschrieben wurde.
+    # Python-Listen sind veränderbar, daher können wir dies direkt tun.
+    for i, artist in enumerate(ARTIST_LIST):
+        if artist == "Led Zepplin":
+            ARTIST_LIST[i] = "Led Zeppelin"
+
     artists_to_check = []
     if ANALYSIS_MODE == 'LIST':
         print(f"--- Modus 'LIST' aktiv: Analysiere {len(ARTIST_LIST)} Interpreten aus der Liste ---")
@@ -138,7 +138,6 @@ def main():
         print(f"FEHLER: Unbekannter ANALYSIS_MODE '{ANALYSIS_MODE}'. Bitte 'LIST' oder 'ALL' verwenden.")
         return
 
-    # Sammeln der Daten
     all_artist_stats = []
     for artist_name in artists_to_check:
         prices = analyze_artist(artist_name, d)
@@ -157,27 +156,21 @@ def main():
         print("\nKeine Daten gesammelt. Die Analyse wird beendet.")
         return
         
-    # Verarbeitung und Speichern der Ergebnisse
     print("\n--- Analyse abgeschlossen. Erstelle Excel-Datei... ---")
     
-    # DataFrame erstellen und sortieren
     df = pd.DataFrame(all_artist_stats)
     df_sorted = df.sort_values(by="LP-Mittelwert", ascending=False)
     
-    # Auf die Top 200 beschränken
     df_top200 = df_sorted.head(200)
     
-    # Formatierung für die Excel-Datei
     df_top200['LP-Mittelwert'] = df_top200['LP-Mittelwert'].map('{:,.2f} €'.format)
     df_top200['LP-Maximalwert'] = df_top200['LP-Maximalwert'].map('{:,.2f} €'.format)
     
-    # Speichern in Excel
     try:
         df_top200.to_excel(OUTPUT_FILENAME, index=False, engine='openpyxl')
         print(f"Erfolgreich! Die Top {len(df_top200)} Interpreten wurden in der Datei '{OUTPUT_FILENAME}' gespeichert.")
     except Exception as e:
         print(f"Fehler beim Speichern der Excel-Datei: {e}")
-
 
 if __name__ == "__main__":
     main()
