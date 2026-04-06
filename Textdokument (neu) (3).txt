@@ -1,0 +1,79 @@
+import requests
+from bs4 import BeautifulSoup
+import pandas as pd
+import re
+
+def scrape_chrono24(url):
+    """
+    Diese Funktion scrapet Uhrennamen und Preise von einer gegebenen Chrono24-URL.
+
+    Args:
+        url (str): Die URL der Chrono24-Suchergebnisseite.
+
+    Returns:
+        pandas.DataFrame: Ein DataFrame mit den extrahierten Daten.
+    """
+    # Ein User-Agent-Header wird hinzugefügt, um wie ein normaler Browser auszusehen
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
+
+    try:
+        # Die Webseite abrufen
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()  # Löst einen Fehler aus, wenn die Anfrage fehlschlägt
+
+        # Den HTML-Inhalt mit BeautifulSoup parsen
+        soup = BeautifulSoup(response.content, 'html.parser')
+
+        watches = []
+        # Finden Sie alle Container, die einzelne Uhren-Angebote enthalten.
+        # Der Klassenname 'js-article-item' oder 'article-item-container' ist ein wahrscheinlicher Kandidat.
+        # Sie MÜSSEN diesen Klassennamen durch Inspektion der Seite verifizieren.
+        for item in soup.find_all('div', class_='js-article-item'):
+            
+            # Name der Uhr extrahieren
+            # Suchen Sie nach einem Element mit einer spezifischen Klasse für den Titel.
+            name_element = item.find('div', class_='js-article-title')
+            name = name_element.text.strip() if name_element else 'Nicht gefunden'
+
+            # Preis der Uhr extrahieren
+            # Suchen Sie nach einem Element mit einer spezifischen Klasse für den Preis.
+            price_element = item.find('div', class_='js-price')
+            if price_element:
+                # Preis-Text extrahieren und bereinigen (z.B. Währungssymbole, "€", "," entfernen)
+                price_text = price_element.text.strip()
+                # Nur Ziffern und ein Dezimalpunkt extrahieren
+                price_digits = re.findall(r'\d+', price_text)
+                price = ''.join(price_digits)
+            else:
+                price = 'Nicht gefunden'
+
+            if name != 'Nicht gefunden':
+                 watches.append({'Uhrenname': name, 'Preis in EUR': int(price) if price.isdigit() else price})
+
+        # Ein DataFrame aus den gesammelten Daten erstellen
+        df = pd.DataFrame(watches)
+        return df
+
+    except requests.exceptions.RequestException as e:
+        print(f"Fehler bei der Anfrage: {e}")
+        return pd.DataFrame() # Leeren DataFrame bei Fehler zurückgeben
+
+# --- Hauptteil des Skripts ---
+if __name__ == "__main__":
+    # Beispiel-URL für eine Suche nach "Rolex Submariner"
+    # Ersetzen Sie dies durch Ihre gewünschte Such-URL
+    CHRONO24_URL = 'https://www.chrono24.de/search/index.htm?query=Rolex+Submariner&dosearch=true&searchexplain=true'
+    
+    # Daten von der Webseite abrufen
+    watch_data = scrape_chrono24(CHRONO24_URL)
+
+    if not watch_data.empty:
+        # Daten in eine Excel-Datei speichern
+        output_filename = 'chrono24_preise.xlsx'
+        watch_data.to_excel(output_filename, index=False)
+        print(f"Daten wurden erfolgreich in '{output_filename}' gespeichert.")
+    else:
+        print("Keine Daten zum Speichern gefunden.")
+
