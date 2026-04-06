@@ -1,0 +1,110 @@
+import discogs_client
+import pandas as pd
+import time
+
+def get_artist_lps_from_discogs(artist_names, discogs_token):
+    """
+    Sammelt LP-Daten für ausgewählte Künstler von Discogs und gibt sie als DataFrame zurück.
+
+    Args:
+        artist_names (list): Eine Liste von Künstlernamen, nach denen gesucht werden soll.
+        discogs_token (str): Ihr persönlicher Discogs API-Token.
+
+    Returns:
+        pandas.DataFrame: Ein DataFrame mit den LP-Daten (Künstler, Albumtitel, Jahr, Label, Preis).
+    """
+    if not discogs_token or discogs_token == "IHR_DISCOGS_TOKEN":
+        print("Fehler: Bitte ersetzen Sie 'IHR_DISCOGS_TOKEN' durch Ihren persönlichen Discogs-Zugriffstoken.")
+        print("Sie können einen Token hier erstellen: https://www.discogs.com/settings/developers")
+        return pd.DataFrame() # Leeren DataFrame zurückgeben, wenn kein Token vorhanden ist
+
+    # Initialisieren des Discogs-Clients
+    try:
+        user_agent = 'MeinCoolesExcelSkript/1.0'
+        client = discogs_client.Client(user_agent, user_token=discogs_token)
+    except Exception as e:
+        print(f"Fehler bei der Initialisierung des Discogs-Clients: {e}")
+        return pd.DataFrame()
+
+    all_releases_data = []
+    print(f"Suche nach Alben für die Künstler: {', '.join(artist_names)}...")
+
+    for artist_name in artist_names:
+        try:
+            # Suchen nach dem Künstler
+            results = client.search(artist_name, type='artist')
+            if not results:
+                print(f"Künstler '{artist_name}' nicht gefunden.")
+                continue
+
+            artist = results[0]
+            print(f"\nVerarbeite Veröffentlichungen für '{artist.name}'...")
+
+            # Durch die Veröffentlichungen des Künstlers iterieren
+            # Eine kleine Pause zwischen den API-Aufrufen ist wichtig, um das Rate-Limit nicht zu überschreiten
+            for release in artist.releases:
+                time.sleep(1) # API-Anfragen verlangsamen
+                
+                # Prüfen, ob es sich um eine LP handelt
+                is_lp = False
+                if release.formats:
+                    for fmt in release.formats:
+                        if fmt.get('name') == 'Vinyl' and 'LP' in fmt.get('descriptions', []):
+                            is_lp = True
+                            break
+                
+                if is_lp:
+                    # Daten extrahieren
+                    title = release.title
+                    year = release.year
+                    # Das erste Label aus der Liste der Labels nehmen
+                    label = release.labels[0].name if release.labels else 'N/A'
+                    
+                    # Preisinformationen abrufen (kann None sein, wenn nicht im Marketplace verfügbar)
+                    price = release.lowest_price if hasattr(release, 'lowest_price') and release.lowest_price is not None else 0.0
+                    
+                    all_releases_data.append({
+                        "Künstler": artist.name,
+                        "Albumtitel": title,
+                        "Jahr": year,
+                        "Label": label,
+                        "Niedrigster Preis (€)": price
+                    })
+                    print(f"  -> Gefunden: '{title}' ({year}), Preis: {price if price > 0 else 'N/A'}")
+
+        except Exception as e:
+            print(f"Ein Fehler ist bei der Verarbeitung von '{artist_name}' aufgetreten: {e}")
+
+    # DataFrame aus den gesammelten Daten erstellen
+    df = pd.DataFrame(all_releases_data)
+    return df
+
+def save_to_excel(dataframe, filename="discogs_lp_preise.xlsx"):
+    """Speichert den DataFrame in einer Excel-Datei."""
+    if dataframe.empty:
+        print("\nKeine Daten zum Speichern vorhanden.")
+        return
+        
+    try:
+        dataframe.to_excel(filename, index=False, engine='openpyxl')
+        print(f"\nDaten erfolgreich in '{filename}' gespeichert.")
+    except Exception as e:
+        print(f"Fehler beim Speichern der Excel-Datei: {e}")
+
+
+# --- HAUPTTEIL DES SKRIPTS ---
+if __name__ == "__main__":
+    # 1. Fügen Sie hier Ihren persönlichen Discogs-Token ein
+    # Diesen Token erhalten Sie hier: https://www.discogs.com/settings/developers
+    DISCOGS_API_TOKEN = "IHR_DISCOGS_TOKEN"
+
+    # 2. Geben Sie die Künstler an, nach denen Sie suchen möchten
+    ARTISTS_TO_SEARCH = ["Pink Floyd", "Led Zeppelin", "Kraftwerk"]
+
+    # 3. Daten von Discogs abrufen
+    lp_data_df = get_artist_lps_from_discogs(ARTISTS_TO_SEARCH, DISCOGS_API_TOKEN)
+
+    # 4. Daten in Excel speichern
+    if not lp_data_df.empty:
+        save_to_excel(lp_data_df)
+
