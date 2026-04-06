@@ -5,6 +5,7 @@ import time
 def get_artist_lps_from_discogs(artist_names, discogs_token):
     """
     Sammelt LP-Daten für ausgewählte Künstler von Discogs und gibt sie als DataFrame zurück.
+    Behandelt den Unterschied zwischen Master- und normalen Releases.
 
     Args:
         artist_names (list): Eine Liste von Künstlernamen, nach denen gesucht werden soll.
@@ -16,11 +17,10 @@ def get_artist_lps_from_discogs(artist_names, discogs_token):
     if not discogs_token or discogs_token == "IHR_DISCOGS_TOKEN":
         print("Fehler: Bitte ersetzen Sie 'IHR_DISCOGS_TOKEN' durch Ihren persönlichen Discogs-Zugriffstoken.")
         print("Sie können einen Token hier erstellen: https://www.discogs.com/settings/developers")
-        return pd.DataFrame() # Leeren DataFrame zurückgeben, wenn kein Token vorhanden ist
+        return pd.DataFrame()
 
-    # Initialisieren des Discogs-Clients
     try:
-        user_agent = 'MeinCoolesExcelSkript/1.0'
+        user_agent = 'MeinCoolesExcelSkript/2.0' # Version erhöht
         client = discogs_client.Client(user_agent, user_token=discogs_token)
     except Exception as e:
         print(f"Fehler bei der Initialisierung des Discogs-Clients: {e}")
@@ -31,7 +31,6 @@ def get_artist_lps_from_discogs(artist_names, discogs_token):
 
     for artist_name in artist_names:
         try:
-            # Suchen nach dem Künstler
             results = client.search(artist_name, type='artist')
             if not results:
                 print(f"Künstler '{artist_name}' nicht gefunden.")
@@ -40,27 +39,36 @@ def get_artist_lps_from_discogs(artist_names, discogs_token):
             artist = results[0]
             print(f"\nVerarbeite Veröffentlichungen für '{artist.name}'...")
 
-            # Durch die Veröffentlichungen des Künstlers iterieren
-            # Eine kleine Pause zwischen den API-Aufrufen ist wichtig, um das Rate-Limit nicht zu überschreiten
             for release in artist.releases:
-                time.sleep(1) # API-Anfragen verlangsamen
+                time.sleep(1.1) # API-Anfragen verlangsamen (leicht erhöht zur Sicherheit)
                 
-                # Prüfen, ob es sich um eine LP handelt
+                # Standard-Release-Objekt definieren
+                actual_release = release
+
+                # *** KORREKTUR-BLOCK START ***
+                # Wenn es ein Master-Release ist, holen wir uns das "main_release"-Objekt,
+                # da das Master-Objekt selbst keine Format-Infos hat.
+                if isinstance(release, discogs_client.models.Master):
+                    actual_release = release.main_release
+                    # Es kann nötig sein, das Objekt neu zu laden, um alle Details zu erhalten
+                    actual_release.refresh()
+                    time.sleep(1.1)
+                # *** KORREKTUR-BLOCK ENDE ***
+
                 is_lp = False
-                if release.formats:
-                    for fmt in release.formats:
+                if actual_release and actual_release.formats:
+                    for fmt in actual_release.formats:
                         if fmt.get('name') == 'Vinyl' and 'LP' in fmt.get('descriptions', []):
                             is_lp = True
                             break
                 
                 if is_lp:
-                    # Daten extrahieren
-                    title = release.title
-                    year = release.year
-                    # Das erste Label aus der Liste der Labels nehmen
-                    label = release.labels[0].name if release.labels else 'N/A'
+                    title = actual_release.title
+                    year = actual_release.year
+                    label = actual_release.labels[0].name if actual_release.labels else 'N/A'
                     
-                    # Preisinformationen abrufen (kann None sein, wenn nicht im Marketplace verfügbar)
+                    # Der niedrigste Preis ist oft auf dem Master-Objekt genauer,
+                    # da er alle Versionen berücksichtigt. Wir verwenden das ursprüngliche 'release'-Objekt.
                     price = release.lowest_price if hasattr(release, 'lowest_price') and release.lowest_price is not None else 0.0
                     
                     all_releases_data.append({
@@ -75,7 +83,6 @@ def get_artist_lps_from_discogs(artist_names, discogs_token):
         except Exception as e:
             print(f"Ein Fehler ist bei der Verarbeitung von '{artist_name}' aufgetreten: {e}")
 
-    # DataFrame aus den gesammelten Daten erstellen
     df = pd.DataFrame(all_releases_data)
     return df
 
@@ -86,16 +93,15 @@ def save_to_excel(dataframe, filename="discogs_lp_preise.xlsx"):
         return
         
     try:
+        # Benötigt die 'openpyxl' Bibliothek
         dataframe.to_excel(filename, index=False, engine='openpyxl')
         print(f"\nDaten erfolgreich in '{filename}' gespeichert.")
     except Exception as e:
         print(f"Fehler beim Speichern der Excel-Datei: {e}")
 
-
 # --- HAUPTTEIL DES SKRIPTS ---
 if __name__ == "__main__":
     # 1. Fügen Sie hier Ihren persönlichen Discogs-Token ein
-    # Diesen Token erhalten Sie hier: https://www.discogs.com/settings/developers
     DISCOGS_API_TOKEN = "IHR_DISCOGS_TOKEN"
 
     # 2. Geben Sie die Künstler an, nach denen Sie suchen möchten
@@ -107,4 +113,3 @@ if __name__ == "__main__":
     # 4. Daten in Excel speichern
     if not lp_data_df.empty:
         save_to_excel(lp_data_df)
-
